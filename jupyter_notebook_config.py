@@ -28,6 +28,9 @@ c.NotebookApp.tornado_settings = {
     'static_url_prefix': '%s/ipython/static/' % os.environ.get('PROXY_PREFIX', '')
 }
 
+#AF
+c.NotebookApp.token = ''
+#END AF
 if os.environ.get('NOTEBOOK_PASSWORD', 'none') != 'none':
     c.NotebookApp.password = os.environ['NOTEBOOK_PASSWORD']
     del os.environ['NOTEBOOK_PASSWORD']

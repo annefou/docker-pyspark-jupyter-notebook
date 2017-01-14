@@ -1,15 +1,47 @@
 # Jupyter container used for Galaxy IPython (+other kernels) Integration
+# From Björn A. Grüning, bjoern.gruening@gmail.com
 #
 # VERSION   0.1
 
 FROM jupyter/minimal-notebook:4.0
 
-MAINTAINER Björn A. Grüning, bjoern.gruening@gmail.com
+MAINTAINER Anne Fouilloux, annefou@geo.uio.no
 
 ENV DEBIAN_FRONTEND noninteractive
 
 # Install system libraries first as root
 USER root
+
+# Spark dependencies
+ENV APACHE_SPARK_VERSION 2.0.2
+ENV HADOOP_VERSION 2.7
+
+# Apache Spark installation
+
+RUN cd /tmp && \
+        wget -q http://d3kbcqa49mib13.cloudfront.net/spark-${APACHE_SPARK_VERSION}-bin-hadoop${HADOOP_VERSION}.tgz && \
+        echo "e6349dd38ded84831e3ff7d391ae7f2525c359fb452b0fc32ee2ab637673552a *spark-${APACHE_SPARK_VERSION}-bin-hadoop${HADOOP_VERSION}.tgz" | sha256sum -c - && \
+        tar xzf spark-${APACHE_SPARK_VERSION}-bin-hadoop${HADOOP_VERSION}.tgz -C /usr/local && \
+        rm spark-${APACHE_SPARK_VERSION}-bin-hadoop${HADOOP_VERSION}.tgz
+RUN cd /usr/local && ln -s spark-${APACHE_SPARK_VERSION}-bin-hadoop${HADOOP_VERSION} spark
+
+# Mesos dependencies
+RUN apt-key adv --keyserver keyserver.ubuntu.com --recv E56151BF && \
+    DISTRO=debian && \
+    CODENAME=jessie && \
+    echo "deb http://repos.mesosphere.io/${DISTRO} ${CODENAME} main" > /etc/apt/sources.list.d/mesosphere.list && \
+    apt-get -y update && \
+    apt-get --no-install-recommends -y --force-yes install mesos=0.25.0-0.2.70.debian81 && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# Spark and Mesos config
+ENV SPARK_HOME /usr/local/spark
+ENV PYTHONPATH $SPARK_HOME/python:$SPARK_HOME/python/lib/py4j-0.10.3-src.zip
+ENV MESOS_NATIVE_LIBRARY /usr/local/lib/libmesos.so
+ENV SPARK_OPTS --driver-java-options=-Xms1024M --driver-java-options=-Xmx4096M --driver-java-options=-Dlog4j.logLevel=info
+# RSpark config
+ENV R_LIBS_USER $SPARK_HOME/R/lib
 
 RUN apt-get -qq update && apt-get install --no-install-recommends -y libcurl4-openssl-dev libxml2-dev \
     apt-transport-https python-dev libc-dev pandoc pkg-config liblzma-dev libbz2-dev libpcre3-dev \
@@ -17,6 +49,8 @@ RUN apt-get -qq update && apt-get install --no-install-recommends -y libcurl4-op
     libfreetype6-dev libpng-dev net-tools procps libreadline-dev wget software-properties-common octave \
     # Julia dependencies
     julia libnettle4 \
+    # for converting latex to pdf
+    perl-Tk                           \
     # IHaskell dependencies
     zlib1g-dev libtinfo-dev libcairo2-dev libpango1.0-dev && \
     apt-get autoremove -y && apt-get clean && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
@@ -42,14 +76,20 @@ ENV PATH /home/$NB_USER/.cabal/bin:/opt/cabal/1.22/bin:/opt/ghc/7.8.4/bin:/opt/h
 
 USER jovyan
 
+# Install Python 3.5 (dependency for  spylon kernel)
+RUN conda install --yes python=3.5 && conda clean -yt
+
 # Python packages
 RUN conda config --add channels r && conda install --yes numpy pandas scikit-learn scikit-image matplotlib scipy seaborn sympy rpy2 \
-    biopython cython patsy statsmodels cloudpickle dill numba bokeh beautiful-soup && conda clean -yt && pip install --no-cache-dir bioblend
+    biopython cython patsy statsmodels cloudpickle dill numba bokeh && conda clean -yt && pip install --no-cache-dir bioblend
 
 # Now for a python2 environment
 RUN conda create -p $CONDA_DIR/envs/python2 python=2.7 ipykernel numpy pandas scikit-learn rpy2 \
     biopython scikit-image matplotlib scipy seaborn sympy cython patsy statsmodels cloudpickle dill numba bokeh && conda clean -yt && \
     /bin/bash -c "source activate python2 && pip install --no-cache-dir bioblend galaxy-ie-helpers"
+
+# python package for HDF4 data
+RUN conda config --add channels conda-forge && conda install --yes pyhdf && conda clean -yt
 
 RUN $CONDA_DIR/envs/python2/bin/python \
     $CONDA_DIR/envs/python2/bin/ipython \
@@ -76,6 +116,17 @@ RUN cabal update && \
      ~/.cabal/bin/ihaskell install && \
     rm -fr $(echo ~/.cabal/bin/* | grep -iv ihaskell) ~/.cabal/packages ~/.cabal/share/doc ~/.cabal/setup-exe-cache ~/.cabal/logs
 
+USER $NB_USER
+
+# Apache Toree kernel
+RUN pip --no-cache-dir install https://dist.apache.org/repos/dist/dev/incubator/toree/0.2.0/snapshots/dev1/toree-pip/toree-0.2.0.dev1.tar.gz
+RUN jupyter toree install --user
+
+# Spylon-kernel
+RUN pip --no-cache-dir install "spylon-kernel==0.1.2"
+RUN python -m spylon_kernel install --user
+
+USER jovyan
 
 # Extra Kernels
 RUN pip install --user --no-cache-dir bash_kernel bioblend octave_kernel galaxy-ie-helpers && \
